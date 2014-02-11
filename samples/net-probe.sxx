@@ -1,0 +1,179 @@
+#!/usr/bin/env stap++
+#
+#   sample output: [1]1392083169165228 [client]  sendto 9          client 0xffff88007289c680, server 0xffff88007289dd40 =8008
+#   explaination:  [session id]timestamp(us) [client side or server side]  syscall, target fd, client socket addr, server socket addr
+@use kernel.socket
+
+global id_map
+global id_closeing_map
+global counter = 0
+
+function get_u(socket)
+{
+    $*socket := @cast(socket, "struct socket", "kernel")
+    u = $*socket->sk
+    return u
+}
+
+function get_peer(u)
+{
+    $*u := @cast(u, "struct unix_sock", "kernel")
+    other = $*u->peer
+    return other
+}
+
+function get_id(sock)
+{
+    if (id_map[sock]) {
+        return id_map[sock]
+    } else {
+        id_map[sock] = counter
+        counter++
+        return id_map[sock]
+    }
+}
+
+function should_close(u)
+{
+    if (id_closeing_map[u] == 1) {
+        delete(id_closeing_map[u])
+        return 1
+    } else {
+        id_closeing_map[u] = 1
+        return 0
+    }
+}
+
+function del_id(sock)
+{
+    delete(id_map[sock])
+}
+
+
+function tlog(action, fd, srv_sock, cli_sock)
+{
+    printf("[%3d]%d %s\t %3d\t\tclient %p, server %p\n", get_id(srv_sock), gettimeofday_us(), action, fd, srv_sock, cli_sock)
+}
+function tlogr(action, fd, srv_sock, cli_sock, rval)
+{
+    printf("[%3d]%d %s\t %3d\t\tclient %p, server %p =%d\n", get_id(srv_sock), gettimeofday_us(), action, fd, srv_sock, cli_sock, rval)
+}
+
+function is_target_sock(socket, is_client)
+{
+    u = get_u(socket)
+
+    if (is_client == 1) {
+        u = get_peer(u)
+    }
+
+    if (id_map[u]) {
+        return 1
+    } else {
+        return 0
+    }
+}
+
+probe syscall.connect.return {
+    if (pid() == $^arg_con_pid) {
+        if ($return == -1) {
+            printf("connect failed on %d\n", $fd)
+        } else {
+            $*addr_un := @cast($uservaddr, "struct sockaddr_un", "kernel")
+            path = user_string($*addr_un->sun_path)
+            if (isinstr(path, "$^arg_file") == 1) {
+                socket = sockfd_lookup($fd)
+                //$*socket := @cast(socket, "struct socket", "kernel")
+                //printf("connect sock %p\n", socket);
+                u = get_u(socket)
+                other = get_peer(u)
+                //printf("%d connect u %p, other %p\n", get_id(other), u, other);
+                tlogr("[client]  connect", $fd, other, u, $return)
+            }
+        }
+    }
+}
+
+probe syscall.accept.return {
+    if (pid() == $^arg_acc_pid) {
+        if ($return <= 0) {
+            printf("accept failed on %d\n", $fd)
+        } else {
+            socket = sockfd_lookup($return)
+            //sock_file = socket_unix_stream_file_name(socket)
+            //printf("accept sock_file %s %s\n", sock_file, "$^arg_file")
+            if (is_target_sock(socket, 0) == 1) {
+                //ustack = ubacktrace()
+                //print_ustack(ustack)
+                u = get_u(socket)
+                other = get_peer(u)
+                //printf("%d accept u %p, other %p\n", get_id(u), u, other);
+                tlogr("[server]  accept", $fd, u, other, $return)
+            }
+        }
+    }
+}
+
+probe syscall.sendto.return {
+    if (pid() == $^arg_con_pid) {
+        if ($return <= 0) {
+            printf("[client]    sendto failed on %d\n", $fd)
+        } else {
+            socket = sockfd_lookup($fd)
+            //sock_file = socket_unix_stream_file_name(socket)
+            if (is_target_sock(socket, 1) == 1) {
+                u = get_u(socket)
+                other = get_peer(u)
+                tlogr("[client]  sendto", $fd, other, u, $return)
+            }
+        }
+    }
+}
+
+probe syscall.read.return {
+    if (pid() == $^arg_acc_pid) {
+        //if ($return == 0) {
+        //    printf("[server]  read returns 0 on %d\n", $fd)
+        //} else {
+            socket = sockfd_lookup($fd)
+            //sock_file = socket_unix_stream_file_name(socket)
+            if (is_target_sock(socket, 0) == 1) {
+                u = get_u(socket)
+                other = get_peer(u)
+                tlogr("[server]  read", $fd, u, other, $return)
+            }
+        //}
+    }
+}
+
+probe syscall.close {
+    if (pid() == $^arg_acc_pid) {
+        socket = sockfd_lookup($fd)
+        //sock_file = socket_unix_stream_file_name(socket)
+        if (is_target_sock(socket, 0) == 1) {
+            u = get_u(socket)
+            other = get_peer(u)
+            tlog("[server]  close", $fd, u, other)
+            if (should_close(u) == 1) {
+                del_id(u)
+            }
+        }
+    } else if (pid() == $^arg_con_pid) {
+        socket = sockfd_lookup($fd)
+        //sock_file = socket_unix_stream_file_name(socket)
+        if (is_target_sock(socket, 1) == 1) {
+            u = get_u(socket)
+            other = get_peer(u)
+            tlog("[client]  close", $fd, other, u)
+            if (should_close(other) == 1) {
+                del_id(other)
+            }
+        }
+
+    }
+}
+
+probe begin {
+    printf("start probing nginx(%d), tlogfwdr(%d)\n", $^arg_con_pid,
+            $^arg_acc_pid)
+}
