@@ -13,13 +13,13 @@ global counter = 0
 # 3. check if it has the right path
 #
 
-#function condition1(pid)
-#{
-#    if (pid() == pid) {
-#        return 1
-#    }
-#    return 0
-#}
+function condition1(pid)
+{
+    if (pid() == pid) {
+        return 1
+    }
+    return 0
+}
 
 function condition2(pid, fd)
 {
@@ -143,11 +143,18 @@ probe syscall.connect.return {
 }
 
 probe syscall.accept.return {
-    if ($return > 0) {
-        sk = condition3($^arg_acc_pid, $return, 0)
-        if (sk != 0) {
-            other = get_peer(sk)
-            tlogr("[server]  accept", $fd, sk, other, $return)
+    if (condition1($^arg_acc_pid) == 1) {
+        socket_acc = sockfd_lookup($fd)
+        path = socket_unix_stream_file_name(socket_acc)
+        if (strlen(path) != 0 && isinstr("$^arg_file", path) == 1) {
+            if ($return > 0) {
+                socket = sockfd_lookup($return)
+                sk = get_sk(socket)
+                other = get_peer(sk)
+                tlogr("[server]  accept", $fd, sk, other, $return)
+            } else {
+                printf("accept failed on %d\n", $fd)
+            }
         }
     }
 }
