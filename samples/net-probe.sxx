@@ -25,9 +25,11 @@ function condition2(pid, fd)
 {
     if (pid() == pid) {
         socket = sockfd_lookup(fd)
-        sk = get_sk(socket)
-        if (is_unix(sk) == 1) {
-            return sk
+        if (socket != 0) {
+            sk = get_sk(socket)
+            if (is_unix(sk) == 1) {
+                return sk
+            }
         }
     }
     return 0
@@ -37,10 +39,12 @@ function condition3(pid, fd, is_client)
 {
     if (pid() == pid) {
         socket = sockfd_lookup(fd)
-        sk = get_sk(socket)
-        if (is_unix(sk) == 1) {
-            if (is_target_sock(sk, is_client) == 1) {
-                return sk
+        if (socket != 0) {
+            sk = get_sk(socket)
+            if (is_unix(sk) == 1) {
+                if (is_target_sock(sk, is_client) == 1) {
+                    return sk
+                }
             }
         }
     }
@@ -49,6 +53,10 @@ function condition3(pid, fd, is_client)
 
 function is_unix(sk)
 {
+    if (sk == 0) {
+        return 0
+    }
+
     $*sk := @cast(sk, "struct sock", "kernel")
     if ($*sk->__sk_common->skc_family == 1) {
         // AF_UNIX
@@ -60,6 +68,10 @@ function is_unix(sk)
 
 function is_target_sock(sk, is_client)
 {
+    if (sk == 0) {
+        return 0
+    }
+
     if (is_client == 1) {
         sk = get_peer(sk)
     }
@@ -74,16 +86,20 @@ function is_target_sock(sk, is_client)
 
 function get_sk(socket)
 {
+    if (socket == 0) {
+        return 0
+    }
     $*socket := @cast(socket, "struct socket", "kernel")
     u = $*socket->sk
 
-    $*sk := @cast(u, "struct sock", "kernel")
-    //printf("sk->sk_family: %d", $*sk->__sk_common->skc_family)
     return u
 }
 
 function get_peer(u)
 {
+    if (u == 0) {
+        return 0
+    }
     $*u := @cast(u, "struct unix_sock", "kernel")
     other = $*u->peer
     return other
@@ -145,15 +161,21 @@ probe syscall.connect.return {
 probe syscall.accept.return {
     if (condition1($^arg_acc_pid) == 1) {
         socket_acc = sockfd_lookup($fd)
-        path = socket_unix_stream_file_name(socket_acc)
-        if (strlen(path) != 0 && isinstr("$^arg_file", path) == 1) {
-            if ($return > 0) {
-                socket = sockfd_lookup($return)
-                sk = get_sk(socket)
-                other = get_peer(sk)
-                tlogr("[server]  accept", $fd, sk, other, $return)
-            } else {
-                printf("accept failed on %d\n", $fd)
+        if (socket_acc != 0) {
+            path = socket_unix_stream_file_name(socket_acc)
+            if (strlen(path) != 0 && isinstr("$^arg_file", path) == 1) {
+                if ($return > 0) {
+                    socket = sockfd_lookup($return)
+                    if (socket != 0) {
+                        sk = get_sk(socket)
+                        if (sk != 0) {
+                            other = get_peer(sk)
+                            tlogr("[server]  accept", $fd, sk, other, $return)
+                        }
+                    }
+                } else {
+                    printf("accept failed on %d\n", $fd)
+                }
             }
         }
     }
@@ -178,22 +200,26 @@ probe syscall.read.return {
 probe syscall.close {
     if (pid() == $^arg_acc_pid) {
         socket = sockfd_lookup($fd)
-        sk = get_sk(socket)
-        if (is_target_sock(sk, 0) == 1) {
-            other = get_peer(sk)
-            tlog("[server]  close", $fd, sk, other)
-            if (should_close(sk) == 1) {
-                del_id(sk)
+        if (socket != 0) {
+            sk = get_sk(socket)
+            if (is_target_sock(sk, 0) == 1) {
+                other = get_peer(sk)
+                tlog("[server]  close", $fd, sk, other)
+                if (should_close(sk) == 1) {
+                    del_id(sk)
+                }
             }
         }
     } else if (pid() == $^arg_con_pid) {
         socket = sockfd_lookup($fd)
-        sk = get_sk(socket)
-        if (is_target_sock(sk, 1) == 1) {
-            other = get_peer(sk)
-            tlog("[client]  close", $fd, other, sk)
-            if (should_close(other) == 1) {
-                del_id(other)
+        if (socket != 0) {
+            sk = get_sk(socket)
+            if (is_target_sock(sk, 1) == 1) {
+                other = get_peer(sk)
+                tlog("[client]  close", $fd, other, sk)
+                if (should_close(other) == 1) {
+                    del_id(other)
+                }
             }
         }
     }
