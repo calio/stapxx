@@ -1,7 +1,7 @@
 #!/usr/bin/env stap++
 #
 #   sample output: [1]1392083169165228 [client]  sendto 9          client 0xffff88007289c680, server 0xffff88007289dd40 =8008
-#   explaination:  [session id]timestamp(us) [client side or server side]  syscall, target fd, client socket addr, server socket addr
+#   explaination:  [session]timestamp(s) [client side or server side]  syscall, target fd, client socket addr, server socket addr
 @use kernel.socket
 
 global id_map
@@ -135,11 +135,17 @@ function del_id(sock)
 
 function tlog(action, fd, srv_sock, cli_sock)
 {
-    printf("[%3d]%d %s\t %3d\t\tclient %p, server %p\n", get_id(srv_sock), gettimeofday_us(), action, fd, srv_sock, cli_sock)
+    time        = gettimeofday_us()
+    decimal     = time / 1000000
+    fractional  = time % 1000000
+    printf("[%-7d]%d.%d %8s\t%3d    client %p, server %p\n", get_id(srv_sock), decimal, fractional, action, fd, srv_sock, cli_sock)
 }
 function tlogr(action, fd, srv_sock, cli_sock, rval)
 {
-    printf("[%3d]%d %s\t %3d\t\tclient %p, server %p =%d\n", get_id(srv_sock), gettimeofday_us(), action, fd, srv_sock, cli_sock, rval)
+    time        = gettimeofday_us()
+    decimal     = time / 1000000
+    fractional  = time % 1000000
+    printf("[%-7d]%d.%d %8s\t%3d    client %p, server %p =%d\n", get_id(srv_sock), decimal, fractional, action, fd, srv_sock, cli_sock, rval)
 }
 
 probe syscall.connect.return {
@@ -228,4 +234,5 @@ probe syscall.close {
 probe begin {
     printf("start probing nginx(%d), tlogfwdr(%d)\n", $^arg_con_pid,
             $^arg_acc_pid)
+    printf("[session]timestamp         client/server action  fd    client sock,               server sock               =return value\n")
 }
